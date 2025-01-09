@@ -54,16 +54,24 @@ def initastrom(astrompath, parentdir, chip=None):
             print('Could not run with exit error %s'%err)
 
 #%% angle astrometry
-def astrom_angle(astrompath,parentdir, chip):
+def astrom_angle(astrompath, parentdir, chip, rot_val=None):
     os.chdir(gen_pipeline_file_name())
     ramppath = parentdir + 'C%i/' % (chip)
     print('running initial astrometry on ramp imgs...')
-    try:
-        command = 'python ./preprocess/astromangle.py -input %s -output %s' % (ramppath, astrompath)
-        print('Executing command: %s' % command)
-        rval = subprocess.run(command.split(), check=True)
-    except subprocess.CalledProcessError as err:
-        print('Could not run with exit error %s'%err)
+    if rot_val:
+        try:
+            command = 'python ./preprocess/astromangle_new.py -input %s -output %s -rot_val %s' % (ramppath, astrompath, rot_val)
+            print('Executing command: %s' % command)
+            rval = subprocess.run(command.split(), check=True)
+        except subprocess.CalledProcessError as err:
+            print('Could not run with exit error %s'%err)
+    else:
+        try:
+            command = 'python ./preprocess/astromangle_new.py -input %s -output %s' % (ramppath, astrompath)
+            print('Executing command: %s' % command)
+            rval = subprocess.run(command.split(), check=True)
+        except subprocess.CalledProcessError as err:
+            print('Could not run with exit error %s' % err)
 
 #%% flat fielding
 def flatfield(astrompath,FFpath,filter,chip):
@@ -130,6 +138,29 @@ def sexskysub(astrompath,subpath):
     except subprocess.CalledProcessError as err:
         print('Could not run with exit error %s' % err)
 
+#%% astrometry shift
+def shift(subpath, filter):
+    os.chdir(gen_pipeline_file_name())
+    print('Shifting astrometry...')
+    all_fits = [f for f in sorted(os.listdir(subpath)) if f.endswith('.flat.fits')]
+    if len(all_fits) >= 100:
+        imgname = all_fits[0]
+        try:
+            # change back t0 large once fully tested
+            command = 'python ./astrom/astrom_shift.py -remove -segment -pipeline -dir %s -imagename %s -filter %s' % (subpath, imgname, filter)
+            print('Executing command: %s' % command)
+            rval = subprocess.run(command.split(), check=True)
+        except subprocess.CalledProcessError as err:
+            print('Could not run with exit error %s' % err)
+    else:
+        imgname = all_fits[0]
+        try:
+            command = 'python ./astrom/astrom_shift.py -remove -segment -pipeline -dir %s -imagename %s -filter %s' % (subpath, imgname, filter)
+            print('Executing command: %s' % command)
+            rval = subprocess.run(command.split(), check=True)
+        except subprocess.CalledProcessError as err:
+            print('Could not run with exit error %s' % err)
+
 #%% better astrometry
 def astrometry(subpath,sex=None):
     os.chdir(gen_pipeline_file_name())
@@ -171,7 +202,7 @@ def fpack(stackpath,chip):
             stackimg.append(f)
     for f in stackimg:
         try:
-            command = 'fpack -F -Y %s%s' % (stackpath,f)
+            command = 'fpack -D -Y %s%s' % (stackpath,f)
             #print('Executing command: %s' % command)
             rval = subprocess.run(command.split(), check=True)
         except subprocess.CalledProcessError as err:
@@ -186,8 +217,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Automation of the backbone of pipeline, currently processes 1 chip at a time')
     parser.add_argument('-FF', action='store_true', help='optional flag, changes the default pipeline to include a flat fielding step, should improve photometry')
     parser.add_argument('-angle', action='store_true', help='optional flag, forgoes astrometry.net, utilizes center and corner positions to create wcs')
-    parser.add_argument('-sex', action='store_true', help='optional flag, to utlize sextractor background subtraction instead')
+    parser.add_argument('-sex', action='store_true', help='optional flag, to utlize sextractor background subtraction instead, do not currently use!')
     parser.add_argument('-fpack', action='store_true',help='optional flag, use fpack to compress stacked images')
+    parser.add_argument('-shift', action='store_true', help='optional flag, use astrometric shifting script')
     parser.add_argument('-skygen_start',  action='store_true', help='optional flag, starts pipeline at sky gen step')
     parser.add_argument('-skysub_start', action='store_true', help='optional flag, starts pipeline at sky sub step')
     parser.add_argument('-astrom_start', action='store_true', help='optional flag, starts pipeline at sxtrctr / scamp step')
@@ -202,6 +234,9 @@ if __name__ == "__main__":
     parser.add_argument('-chip', type=int, help='[int], number of detector')
     parser.add_argument('-filter', type=str, help='*NOT NECESSARY UNLESS USING -FF* [str], filter of images, ex. "J"',default=None)
     parser.add_argument('-sigma', type=int, help='[int], sigma value for sky sub sigma clipping, default = 4', default=defaults["sigma"])
+    parser.add_argument('-rot_val', type=float, help='[float] optional, put in your rot angle in deg,'
+                                                     ' if you had a non-default rotation angle in your obs'
+                                                     ' (default = 48 deg or 172800")', default=None)
     args = parser.parse_args()
 
     if not args.qual_check_only:
@@ -209,11 +244,34 @@ if __name__ == "__main__":
             if args.skygen_start:
                 astromdir, skydir, subdir, stackdir = makedirectories(args.parent, args.chip)
                 FFdir = makedirectoriesFF(args.parent, args.chip)
-                flatfield(astromdir, FFdir, args.filter, args.chip)
+                #flatfield(astromdir, FFdir, args.filter, args.chip)
                 sky(FFdir, skydir, args.sigma)
                 skysub(FFdir, subdir, skydir, args.chip)
-                astrometry(subdir)
-                stack(subdir, stackdir,args.chip)
+                if args.refine:
+                    initastrom(subdir, subdir)
+                    oldlist = [f for f in sorted(os.listdir(subdir)) if f.endswith('.flat.fits')]
+                    newlist = [j for j in sorted(os.listdir(subdir)) if j.endswith('.flat.new')]
+                    if len(oldlist) <= 15:
+                        errnum = 3
+                    else:
+                        errnum = 6
+                    if len(newlist) < len(oldlist)-errnum:
+                        print('Not enough success with new astrometry! Continuing with initial astrometry...')
+                        for f in newlist:
+                            os.remove(subdir + f)
+                    else:
+                        for f in oldlist:
+                            os.remove(subdir + f)
+                    print('%i files refined! removed old fits files' % len(newlist))
+                    astrometry(subdir)
+                    stack(subdir, stackdir,args.chip)
+                    if args.fpack:
+                        fpack(stackdir,args.chip)
+                else:
+                    astrometry(subdir)
+                    stack(subdir, stackdir,args.chip)
+                    if args.fpack:
+                        fpack(stackdir, args.chip)
             elif args.skysub_start:
                 astromdir, skydir, subdir, stackdir = makedirectories(args.parent, args.chip)
                 FFdir = makedirectoriesFF(args.parent, args.chip)
@@ -233,11 +291,13 @@ if __name__ == "__main__":
                 astromdir, skydir, subdir, stackdir = makedirectories(args.parent, args.chip)
                 FFdir = makedirectoriesFF(args.parent, args.chip)
                 stack(subdir, stackdir,args.chip)
+                if args.fpack:
+                    fpack(stackdir, args.chip)
             else:
                 astromdir, skydir, subdir, stackdir = makedirectories(args.parent, args.chip)
                 FFdir = makedirectoriesFF(args.parent, args.chip)
                 if args.angle:
-                    astrom_angle(astromdir, args.parent, args.chip)
+                    astrom_angle(astromdir, args.parent, args.chip, args.rot_val)
                 else:
                     initastrom(astromdir, args.parent, args.chip)
                 flatfield(astromdir, FFdir, args.filter, args.chip)
@@ -253,23 +313,22 @@ if __name__ == "__main__":
                     initastrom(subdir, subdir)
                     oldlist = [f for f in sorted(os.listdir(subdir)) if f.endswith('.flat.fits')]
                     newlist = [j for j in sorted(os.listdir(subdir)) if j.endswith('.flat.new')]
-                    if len(oldlist) <= 15:
-                        errnum = 3
-                    else:
-                        errnum = 5
+                    errnum = len(oldlist)*0.2
                     if len(newlist) < len(oldlist)-errnum:
-                        print('Not enough success with new astrometry! Continuing with initial astrometry...')
+                        print('Not enough success with new astrometry! (%i fields) Continuing with initial astrometry...' % len(newlist))
                         for f in newlist:
                             os.remove(subdir + f)
                     else:
                         for f in oldlist:
                             os.remove(subdir + f)
-                    print('%i files refined! removed old fits files' % len(newlist))
+                        print('%i files refined! removed old fits files' % len(newlist))
                     astrometry(subdir)
                     stack(subdir, stackdir,args.chip)
                     if args.fpack:
                         fpack(stackdir,args.chip)
                 else:
+                    if args.shift:
+                        shift(subdir,args.filter)
                     astrometry(subdir,args.sex)
                     stack(subdir, stackdir,args.chip)
                     if args.fpack:

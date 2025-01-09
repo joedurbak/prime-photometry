@@ -44,16 +44,27 @@ def flatlists(path, chip):
 
     if log_start_flats:
         if log_end_flats:
-            log_filter = list(log_start['FILTER2'][log_start['OBJNAME'] == 'FLAT'])
+            if log_start['FILTER1'][0] == 'Z':
+                log_filter = list(log_start['FILTER1'][log_start['OBJNAME'] == 'FLAT'])
+            else:
+                log_filter = list(log_start['FILTER2'][log_start['OBJNAME'] == 'FLAT'])
             print('On this night, flats were taken in %s band, both at the start and end of the night' % log_filter[0])
         if not log_end_flats:
-            log_filter = list(log_start['FILTER2'][log_start['OBJNAME'] == 'FLAT'])
+            if log_start['FILTER1'][0] == 'Z':
+                log_filter = list(log_start['FILTER1'][log_start['OBJNAME'] == 'FLAT'])
+            else:
+                log_filter = list(log_start['FILTER2'][log_start['OBJNAME'] == 'FLAT'])
             print('On this night, flats were taken in %s band, just at the start of the night' % log_filter[0])
     elif log_end_flats:
-        log_filter = list(log_end['FILTER2'][log_end['OBJNAME'] == 'FLAT'])
+        if log_start['FILTER1'][0] == 'Z':
+            log_filter = list(log_start['FILTER1'][log_start['OBJNAME'] == 'FLAT'])
+        else:
+            log_filter = list(log_end['FILTER2'][log_end['OBJNAME'] == 'FLAT'])
         print('On this night, flats were taken in %s band, just at the end of the night' % log_filter[0])
     else:
         print('No flats found... ')
+
+    flat_filter = log_filter[0]
 
     if log_start_flats:
         if not log_end_flats:
@@ -78,7 +89,7 @@ def flatlists(path, chip):
             end_images_names_2 = log_end_flats[int(len(log_end_flats) / 2):]
             #flag = 'both'
 
-    return start_images_names_1, start_images_names_2, end_images_names_1, end_images_names_2
+    return start_images_names_1, start_images_names_2, end_images_names_1, end_images_names_2, flat_filter
 
 #%% getting data for all groups and stacking along 3rd dim
 def flatprocessing(direct,start_images_names_1=None,start_images_names_2=None,end_images_names_1=None,end_images_names_2=None):
@@ -158,6 +169,9 @@ def flatprocessing(direct,start_images_names_1=None,start_images_names_2=None,en
     if not isExist:
         os.mkdir('mflats')
 
+    save_name_start = None
+    save_name_end = None
+
     if start_images_names_1:
         header_start = fits.getheader(start_images_names_1[-1])
         filter1_start = header_start.get('FILTER1', 'unknown')
@@ -179,6 +193,8 @@ def flatprocessing(direct,start_images_names_1=None,start_images_names_2=None,en
         print(output_fname_end + ' created!')
 
         fits.HDUList(fits.PrimaryHDU(header=header_end, data=end_median_norm)).writeto(output_fname_end, overwrite=True)
+
+    return save_name_start, save_name_end
 #%%
 
 if __name__ == "__main__":
@@ -188,8 +204,8 @@ if __name__ == "__main__":
     parser.add_argument('-chip', type=int, help='[int], number of detector')
     args = parser.parse_args()
 
-    start_images_names_1, start_images_names_2,end_images_names_1, end_images_names_2 = flatlists(args.dir,args.chip)
-    flatprocessing(args.dir,start_images_names_1, start_images_names_2, end_images_names_1, end_images_names_2)
+    start_images_names_1, start_images_names_2,end_images_names_1, end_images_names_2, flat_filter = flatlists(args.dir,args.chip)
+    save_name_start, save_name_end = flatprocessing(args.dir,start_images_names_1, start_images_names_2, end_images_names_1, end_images_names_2)
 
 
 

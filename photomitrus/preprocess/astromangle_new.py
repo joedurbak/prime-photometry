@@ -27,41 +27,45 @@ from astropy.utils.exceptions import AstropyWarning
 #%%
 warnings.simplefilter('ignore', category=AstropyWarning)
 
+tel_angle_corr = -48
+# rot_val = 48       # default is 48, change if the rot of the telescope is not default (172800) for your obs
+# rot val is default at 48, if you want to use a custom val, use the -rot_val flag (run this script w/ the -h flag to see how it works)
+
 offset_dict = {
     '2': {
         'separation': 0.44850763816602646,
-        'angle': -48 + 45.66331831019727,
-        'rotation': 270.25 - 48,
+        'angle': tel_angle_corr + 45.66331831019727,
+        'rotation': 270.25 + tel_angle_corr,
         'corners': {
             'separation': (0.8440546940520994, 0.5992982059603985, 0.04713389920612984, 0.6021396275144256),
-            'angle': (45.80165572567937-48, 87.63450103257266-48, 43.379142144408796-48, 3.939995837173418-48),
+            'angle': (45.80165572567937+tel_angle_corr, 87.63450103257266+tel_angle_corr, 43.379142144408796+tel_angle_corr, 3.939995837173418+tel_angle_corr),
         }
     },
     '4': {
         'separation': 0.45007521998044664,
-        'angle': -48 + 135.1541758426945,
-        'rotation': 90.10 - 48,
+        'angle': tel_angle_corr + 135.1541758426945,
+        'rotation': 90.10 + tel_angle_corr,
         'corners': {
             'separation': (0.601016428757574, 0.04901034640323484, 0.6029977744583211, 0.8456369866921561),
-            'angle': (176.96558950424802-48, 133.66527108136722-48, 93.4803481359835-48, 135.2329686892295-48),
+            'angle': (176.96558950424802+tel_angle_corr, 133.66527108136722+tel_angle_corr, 93.4803481359835+tel_angle_corr, 135.2329686892295+tel_angle_corr),
         }
     },
     '3': {
         'separation': 0.44169840857795223,
-        'angle': -48 + 225.56641620402425,
-        'rotation': 91.41 - 48,
+        'angle': tel_angle_corr + 225.56641620402425,
+        'rotation': 91.41 + tel_angle_corr,
         'corners': {
             'separation': (0.837484328429415, 0.5967910467757283, 0.040129482544494374, 0.5947483907048631),
-            'angle': (225.4819246084007-48, 267.77509433798167-48, 227.13371609154987-48, 183.21310183951354-48),
+            'angle': (225.4819246084007+tel_angle_corr, 267.77509433798167+tel_angle_corr, 227.13371609154987+tel_angle_corr, 183.21310183951354+tel_angle_corr),
         }
     },
     '1': {
         'separation': 0.4457960233925488,
-        'angle': -48 + 315.7002683305685,
-        'rotation': 270.56 - 48,
+        'angle': tel_angle_corr + 315.7002683305685,
+        'rotation': 270.56 + tel_angle_corr,
         'corners': {
             'separation': (0.5989415235089534, 0.044278559406327196, 0.5985614992422466, 0.8416094636073621),
-            'angle': (357.70292702168376-48, 315.8881546490197-48, 273.6751062684781-48, 315.6959537354861-48),
+            'angle': (357.70292702168376+tel_angle_corr, 315.8881546490197+tel_angle_corr, 273.6751062684781+tel_angle_corr, 315.6959537354861+tel_angle_corr),
         }
     },
     'corner_x_y': [(0, 0), (0, 4096), (4096, 4096), (4096, 0)]
@@ -113,7 +117,7 @@ def get_files(directory):
     return fits_files
 
 
-def update_ra_dec(fits_file):
+def update_ra_dec(fits_file, rot_val):
     print(fits_file)
     with fits.open(fits_file, 'update') as f:
         header = f[0].header
@@ -122,8 +126,12 @@ def update_ra_dec(fits_file):
             dec = header['DEC']
             rad = header['RA-D']
             decd = header['DEC-D']
-            #rotation = header['ROTOFF']        #manually adjust value for now! until issue is fixed!
-            rotation = 48
+            rotation = header['ROTOFF']
+            try:
+                float(rotation)
+            except ValueError:
+                rotation = rot_val  #48  # manually adjust value for now! until issue is fixed!
+            # rotation = 48
             rot = header['ROT']
             chip = str(header['CHIP'])
             chip_coords, new_rotation = calc_offset_detector(ra, dec, rotation, chip)
@@ -159,24 +167,11 @@ def update_ra_dec(fits_file):
             )
 
             header.update(gen_wcs(ra, dec, rotation, chip).to_header(relax=True))
-
-            # remove conflicting keywords (this is nuclear rn, should update in the future to just remove bad cards)
-            ctype1 = header['CTYPE1']
-            ctype2 = header['CTYPE2']
-            ra = header['RA-D']
-            dec = header['DEC-D']
-            del (header[6:-76])
-            header.insert(5, ('CTYPE1', ctype1, 'Right ascension, gnomonic projection'))
-            header.insert(6, ('CTYPE2', ctype2, 'Declination, gnomonic projection'))
-            header.insert(7, ('RA-D', ra, 'Right ascension'))
-            header.insert(8, ('DEC-D', dec, 'Declination'))
         else:
             print('Already updated')
 
     #update fits file pc matrix to cd matrix for reading by scamp
 
-    fits.delval(fits_file, 'CDELT1')
-    fits.delval(fits_file, 'CDELT2')
     #fits.delval(fits_file, 'CD1_1')
     #fits.delval(fits_file, 'CD1_2')
     #fits.delval(fits_file, 'CD2_2')
@@ -194,32 +189,50 @@ def update_ra_dec(fits_file):
     fits.delval(fits_file, 'PC2_1')
     fits.delval(fits_file, 'PC2_2')
 
-
-def update_ra_dec_directory(directory):
+    #CRPIX alteration
+    if tel_angle_corr == -48 and rot_val == 48:
+        if "C3" in fits_file:
+            print('CRPIX fine shift for C3 implemented!')
+            cr1 = fits.getval(fits_file, 'CRPIX1')
+            cr2 = fits.getval(fits_file, 'CRPIX2')
+            fits.setval(fits_file, 'CRPIX1', value=cr1+33)
+            fits.setval(fits_file, 'CRPIX2', value=cr2-25)
+        elif "C2" in fits_file:
+            print('CRPIX fine shift for C2 implemented!')
+            cr1 = fits.getval(fits_file, 'CRPIX1')
+            cr2 = fits.getval(fits_file, 'CRPIX2')
+            fits.setval(fits_file, 'CRPIX1', value=cr1+15)
+            fits.setval(fits_file, 'CRPIX2', value=cr2+16)
+        elif "C1" in fits_file:
+            print('CRPIX fine shift for C1 implemented!')
+            cr1 = fits.getval(fits_file, 'CRPIX1')
+            cr2 = fits.getval(fits_file, 'CRPIX2')
+            fits.setval(fits_file, 'CRPIX1', value=cr1+-5)
+            fits.setval(fits_file, 'CRPIX2', value=cr2+46)
+        elif "C4" in fits_file:
+            print('CRPIX fine shift for C4 implemented!')
+            cr1 = fits.getval(fits_file, 'CRPIX1')
+            cr2 = fits.getval(fits_file, 'CRPIX2')
+            fits.setval(fits_file, 'CRPIX1', value=cr1+12)
+            fits.setval(fits_file, 'CRPIX2', value=cr2+4)
+    # elif tel_angle_corr == 0:
+        # place found CRPIX values here
+           # c1=(0,-44)              #Swift_1246989   #c3 and c4 values are not available
+           # c2=(-21,-19)
+def update_ra_dec_directory(directory, rot_val):
     fits_files = [os.path.join(directory, f) for f in get_files(directory)]
     for fits_file in fits_files:
-        update_ra_dec(fits_file)
+        update_ra_dec(fits_file, rot_val)
 
-
-def update_ra_dec_move_directory(input,output):
+def update_ra_dec_move_directory(input, output, rot_val):
     for f in sorted(os.listdir(input)):
-        if f.endswith('.ramp.fits'):
+        if f.endswith('.fits'):
             origpath = os.path.join(input,f)
-            fnewname = f.replace('.ramp.fits', '.ramp.new')
+            fnewname = f.replace('.fits', '.new')
             newpath = os.path.join(output,fnewname)
             shutil.copyfile(origpath, newpath)
-            update_ra_dec(newpath)
+            update_ra_dec(newpath, rot_val)
             print('%s updated, renamed, and moved!' % fnewname)
-
-
-def update_ra_dec_move(f,output):
-    input = ''                  # TODO: put in directory of mounted drive when that's done
-    origpath = os.path.join(input, f)
-    fnewname = f.replace('.ramp.fits', '.ramp.new')
-    newpath = os.path.join(output,fnewname)
-    shutil.copyfile(origpath, newpath)
-    update_ra_dec(newpath)
-    print('%s updated, renamed, and moved!' % fnewname)
 
 
 def old_main():
@@ -240,20 +253,20 @@ def old_main():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='alternative to astrometry.net, generates initial astrometry on imgs'
-                                                 ' using telescope pointing and corner positions')
+                                                 ' using telescope pointing and corner positions - new')
     parser.add_argument('-input', type=str, help='[str] input path or single file for ramp images, put only this field if you '
                                                  'want to generate astrometry w/o changing names or path')
     parser.add_argument('-output', type=str, help='[str] output path for images w/ astrometry (ramp.new), to '
                                                   'be used in pipeline',default=None)
+    parser.add_argument('-rot_val', type=float, help='[float] Use if you want to input a custom rotation value '
+                                                     '(the default is 48 deg)', default=48)
+
     args = parser.parse_args()
+
     if os.path.isdir(args.input):
         if args.output:
-            update_ra_dec_move_directory(args.input,args.output)
-        else:
-            update_ra_dec_directory(args.input)
+            update_ra_dec_move_directory(args.input, args.output, args.rot_val)
+        if not args.output:
+            update_ra_dec_directory(args.input, args.rot_val)
     elif os.path.isfile(args.input):
-        update_ra_dec(args.input)
-        if args.output:
-            update_ra_dec_move(args.input,args.output)
-        else:
-            pass
+        update_ra_dec(args.input, args.rot_val)
